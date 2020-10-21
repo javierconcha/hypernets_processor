@@ -3,13 +3,13 @@ Tests for HypernetsWriter class
 """
 
 import unittest
-from unittest.mock import patch
-from unittest.mock import MagicMock
-import datetime
-import xarray
-import numpy as np
+from unittest.mock import patch, MagicMock
+from hypernets_processor.data_io.dataset_util import DatasetUtil
 from hypernets_processor.data_io.hypernets_writer import HypernetsWriter
+from hypernets_processor.test.test_functions import setup_test_context
 from hypernets_processor.version import __version__
+from xarray import Dataset
+import numpy as np
 
 
 '''___Authorship___'''
@@ -26,172 +26,75 @@ __status__ = "Development"
 
 class TestHypernetsWriter(unittest.TestCase):
 
-    def test_write_netcdf(self):
+    @patch('hypernets_processor.data_io.tests.test_hypernets_writer.HypernetsWriter._write_netcdf')
+    def test_write_netcdf(self, mock_write):
+        context = setup_test_context()
+
+        ds = Dataset()
+        ds.attrs["product_name"] = "test"
+
+        hw = HypernetsWriter(context=context)
+
+        hw.write(ds, fmt="netcdf")
+        mock_write.assert_called_once_with(ds, "out/site/2021/4/3/test.nc", compression_level=None)
+
+    @patch('hypernets_processor.data_io.tests.test_hypernets_writer.HypernetsWriter._write_netcdf')
+    def test_write_no_context_netcdf(self, mock_write):
+        ds = Dataset()
+        ds.attrs["product_name"] = "test"
+
+        hw = HypernetsWriter()
+
+        hw.write(ds, directory="test", fmt="netcdf")
+        mock_write.assert_called_once_with(ds, "test/test.nc", compression_level=None)
+
+    @patch('hypernets_processor.data_io.tests.test_hypernets_writer.HypernetsWriter._write_csv')
+    def test_write_no_context_csv(self, mock_write):
+        ds = Dataset()
+        ds.attrs["product_name"] = "test"
+
+        hw = HypernetsWriter()
+
+        hw.write(ds, directory="test", fmt="csv")
+        mock_write.assert_called_once_with(ds, "test/test.csv")
+
+    def test_write_no_context_no_directory_netcdf(self):
+        ds = Dataset()
+        ds.attrs["product_name"] = "test"
+
+        hw = HypernetsWriter()
+
+        self.assertRaises(ValueError, hw.write, ds)
+
+    def test_write_no_context_badfmt(self):
+        ds = Dataset()
+        ds.attrs["product_name"] = "test"
+
+        hw = HypernetsWriter()
+
+        self.assertRaises(NameError, hw.write, ds, directory="asdfasdf", fmt="dsfdfg")
+
+    def test__write_netcdf(self):
 
         ds = MagicMock()
         path = "test.nc"
 
-        HypernetsWriter.write(ds, path)
+        HypernetsWriter._write_netcdf(ds, path)
 
         ds.to_netcdf.assert_called_once_with(path, encoding={}, engine='netcdf4', format='netCDF4')
 
-    @patch('hypernets_processor.data_io.hypernets_writer.TemplateUtil')
-    def test_create_template_dataset_l1_rad_land(self, mock_tu):
+    def test_fill_ds(self):
+        ds = Dataset()
+        ds["array_variable1"] = DatasetUtil.create_variable([7, 8], np.float32)
+        ds["array_variable2"] = DatasetUtil.create_variable([7, 8], np.float32)
 
-        n_w = 271
-        n_s = 10
-        ds = HypernetsWriter.create_template_dataset_l1_rad(n_w, n_s, network="land")
+        ds["array_variable1"][2, 3] = np.nan
+        ds["array_variable2"][2, 3] = np.nan
 
-        # test ds
-        self.assertEqual(type(ds), xarray.Dataset)
+        HypernetsWriter.fill_ds(ds)
 
-        # test calls to TemplateUtil
-        self.assertTrue(mock_tu.called)
-        mock_tu.return_value.add_common_variables.assert_called_once_with(ds, n_w, n_s)
-        mock_tu.return_value.add_l1_rad_variables.assert_called_once_with(ds, n_w, n_s)
-        mock_tu.return_value.add_common_metadata.assert_called_once_with(ds)
-        mock_tu.return_value.add_l1_rad_metadata.assert_called_once_with(ds)
-        mock_tu.return_value.add_land_network_metadata.assert_called_once_with(ds)
-
-    @patch('hypernets_processor.data_io.hypernets_writer.TemplateUtil')
-    def test_create_template_dataset_l1_rad_water(self, mock_tu):
-
-        n_w = 271
-        n_s = 10
-        ds = HypernetsWriter.create_template_dataset_l1_rad(n_w, n_s, network="water")
-
-        # test ds
-        self.assertEqual(type(ds), xarray.Dataset)
-
-        # test calls to TemplateUtil
-        self.assertTrue(mock_tu.called)
-        mock_tu.return_value.add_common_variables.assert_called_once_with(ds, n_w, n_s)
-        mock_tu.return_value.add_l1_rad_variables.assert_called_once_with(ds, n_w, n_s)
-        mock_tu.return_value.add_common_metadata.assert_called_once_with(ds)
-        mock_tu.return_value.add_l1_rad_metadata.assert_called_once_with(ds)
-        mock_tu.return_value.add_water_network_metadata.assert_called_once_with(ds)
-
-    @patch('hypernets_processor.data_io.hypernets_writer.TemplateUtil')
-    def test_create_template_dataset_l1_irr_land(self, mock_tu):
-        n_w = 271
-        n_s = 10
-        ds = HypernetsWriter.create_template_dataset_l1_irr(n_w, n_s, network="land")
-
-        # test ds
-        self.assertEqual(type(ds), xarray.Dataset)
-
-        # test calls to TemplateUtil
-        self.assertTrue(mock_tu.called)
-        mock_tu.return_value.add_common_variables.assert_called_once_with(ds, n_w, n_s)
-        mock_tu.return_value.add_l1_irr_variables.assert_called_once_with(ds, n_w, n_s)
-        mock_tu.return_value.add_common_metadata.assert_called_once_with(ds)
-        mock_tu.return_value.add_l1_irr_metadata.assert_called_once_with(ds)
-        mock_tu.return_value.add_land_network_metadata.assert_called_once_with(ds)
-
-    @patch('hypernets_processor.data_io.hypernets_writer.TemplateUtil')
-    def test_create_template_dataset_l1_irr_water(self, mock_tu):
-        n_w = 271
-        n_s = 10
-        ds = HypernetsWriter.create_template_dataset_l1_irr(n_w, n_s, network="water")
-
-        # test ds
-        self.assertEqual(type(ds), xarray.Dataset)
-
-        # test calls to TemplateUtil
-        self.assertTrue(mock_tu.called)
-        mock_tu.return_value.add_common_variables.assert_called_once_with(ds, n_w, n_s)
-        mock_tu.return_value.add_l1_irr_variables.assert_called_once_with(ds, n_w, n_s)
-        mock_tu.return_value.add_common_metadata.assert_called_once_with(ds)
-        mock_tu.return_value.add_l1_irr_metadata.assert_called_once_with(ds)
-        mock_tu.return_value.add_water_network_metadata.assert_called_once_with(ds)
-
-    @patch('hypernets_processor.data_io.hypernets_writer.TemplateUtil')
-    def test_create_template_dataset_l2a_land(self, mock_tu):
-        n_w = 271
-        n_s = 10
-        ds = HypernetsWriter.create_template_dataset_l2a(n_w, n_s, network="land")
-
-        # test ds
-        self.assertEqual(type(ds), xarray.Dataset)
-
-        # test calls to TemplateUtil
-        self.assertTrue(mock_tu.called)
-        mock_tu.return_value.add_common_variables.assert_called_once_with(ds, n_w, n_s)
-        mock_tu.return_value.add_l2a_variables.assert_called_once_with(ds, n_w, n_s)
-        mock_tu.return_value.add_common_metadata.assert_called_once_with(ds)
-        mock_tu.return_value.add_l2_metadata.assert_called_once_with(ds)
-        mock_tu.return_value.add_land_network_metadata.assert_called_once_with(ds)
-
-    @patch('hypernets_processor.data_io.hypernets_writer.TemplateUtil')
-    def test_create_template_dataset_l2a_water(self, mock_tu):
-        n_w = 271
-        n_s = 10
-        ds = HypernetsWriter.create_template_dataset_l2a(n_w, n_s, network="water")
-
-        # test ds
-        self.assertEqual(type(ds), xarray.Dataset)
-
-        # test calls to TemplateUtil
-        self.assertTrue(mock_tu.called)
-        mock_tu.return_value.add_common_variables.assert_called_once_with(ds, n_w, n_s)
-        mock_tu.return_value.add_l2a_variables.assert_called_once_with(ds, n_w, n_s)
-        mock_tu.return_value.add_common_metadata.assert_called_once_with(ds)
-        mock_tu.return_value.add_l2_metadata.assert_called_once_with(ds)
-        mock_tu.return_value.add_water_network_metadata.assert_called_once_with(ds)
-
-    @patch('hypernets_processor.data_io.hypernets_writer.TemplateUtil')
-    def test_create_template_dataset_l2b_land(self, mock_tu):
-        n_w = 271
-        n_s = 10
-        ds = HypernetsWriter.create_template_dataset_l2b(n_w, n_s, network="land")
-
-        # test ds
-        self.assertEqual(type(ds), xarray.Dataset)
-
-        # test calls to TemplateUtil
-        self.assertTrue(mock_tu.called)
-        mock_tu.return_value.add_common_variables.assert_called_once_with(ds, n_w, n_s)
-        mock_tu.return_value.add_l2b_variables.assert_called_once_with(ds, n_w, n_s)
-        mock_tu.return_value.add_common_metadata.assert_called_once_with(ds)
-        mock_tu.return_value.add_l2_metadata.assert_called_once_with(ds)
-        mock_tu.return_value.add_land_network_metadata.assert_called_once_with(ds)
-
-    @patch('hypernets_processor.data_io.hypernets_writer.TemplateUtil')
-    def test_create_template_dataset_l2b_water(self, mock_tu):
-        n_w = 271
-        n_s = 10
-        ds = HypernetsWriter.create_template_dataset_l2b(n_w, n_s, network="water")
-
-        # test ds
-        self.assertEqual(type(ds), xarray.Dataset)
-
-        # test calls to TemplateUtil
-        self.assertTrue(mock_tu.called)
-        mock_tu.return_value.add_common_variables.assert_called_once_with(ds, n_w, n_s)
-        mock_tu.return_value.add_l2b_variables.assert_called_once_with(ds, n_w, n_s)
-        mock_tu.return_value.add_common_metadata.assert_called_once_with(ds)
-        mock_tu.return_value.add_l2_metadata.assert_called_once_with(ds)
-        mock_tu.return_value.add_water_network_metadata.assert_called_once_with(ds)
-
-    def test_create_file_name_l1_irr(self):
-
-        fname = HypernetsWriter.create_file_name_l1_irr("L", "GBNA", datetime.datetime(2018, 4, 3, 11, 00, 00), "0.00")
-        self.assertEqual("HYPERNETS_L_GBNA_IRR_201804031100_v0.00.nc", fname)
-
-    def test_create_file_name_l1_rad(self):
-
-        fname = HypernetsWriter.create_file_name_l1_rad("L", "GBNA", datetime.datetime(2018, 4, 3, 11, 00, 00), "0.00")
-        self.assertEqual("HYPERNETS_L_GBNA_RAD_201804031100_v0.00.nc", fname)
-
-    def test_create_file_name_l2a(self):
-
-        fname = HypernetsWriter.create_file_name_l2a("L", "GBNA", datetime.datetime(2018, 4, 3, 11, 00, 00), "0.00")
-        self.assertEqual("HYPERNETS_L_GBNA_REF_201804031100_v0.00.nc", fname)
-
-    def test_create_file_name_l2b(self):
-
-        fname = HypernetsWriter.create_file_name_l2b("L", "GBNA", datetime.datetime(2018, 4, 3, 11, 00, 00), "0.00")
-        self.assertEqual("HYPERNETS_L_GBNA_REFD_20180403_v0.00.nc", fname)
+        self.assertTrue(np.all(ds["array_variable1"] == 9.96921E36))
+        self.assertTrue(np.all(ds["array_variable2"] == 9.96921E36))
 
 
 if __name__ == '__main__':
