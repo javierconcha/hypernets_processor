@@ -56,7 +56,7 @@ def create_template_dataset(variables_dict, dim_sizes_dict, metadata=None, propa
     if metadata is not None:
 
         # Populate metadata from db
-        if metadata_db is not None:
+        if (metadata_db is not None) and (metadata_db_query is not None):
             metadata = TemplateUtil.find_metadata(metadata, metadata_db, metadata_db_query)
 
         ds = TemplateUtil.add_metadata(ds, metadata)
@@ -200,7 +200,7 @@ class TemplateUtil:
         # Find variable names common to target_ds and source_ds, excluding specified exclude variables
         common_variable_names = list(set(target_ds).intersection(source_ds))
         #common_variable_names = list(set(target_ds.variables).intersection(source_ds.variables))
-        print(common_variable_names)
+        #print(common_variable_names)
 
         if exclude is not None:
             common_variable_names = [name for name in common_variable_names if name not in exclude]
@@ -210,8 +210,8 @@ class TemplateUtil:
 
         # Propagate data
         for common_variable_name in common_variable_names:
-            print(source_ds[common_variable_name].values)
-            target_ds[common_variable_name].values = source_ds[common_variable_name].values
+            if target_ds[common_variable_name].shape == source_ds[common_variable_name].shape:
+                target_ds[common_variable_name].values = source_ds[common_variable_name].values
 
     # todo - add method to propagate common unpopulated metadata
 

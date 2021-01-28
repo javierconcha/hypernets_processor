@@ -3,9 +3,18 @@ Surface reflectance class
 """
 
 from hypernets_processor.version import __version__
-from hypernets_processor.data_io.hypernets_ds_builder import HypernetsDSBuilder
+from hypernets_processor.data_io.data_templates import DataTemplates
 from hypernets_processor.data_io.hypernets_writer import HypernetsWriter
 from hypernets_processor.surface_reflectance.measurement_functions.protocol_factory import ProtocolFactory
+from hypernets_processor.calibration.calibrate import Calibrate
+from hypernets_processor.rhymer.rhymer.hypstar.rhymer_hypstar import RhymerHypstar
+from hypernets_processor.rhymer.rhymer.processing.rhymer_processing import RhymerProcessing
+from hypernets_processor.rhymer.rhymer.shared.rhymer_shared import RhymerShared
+from hypernets_processor.plotting.plotting import Plotting
+from hypernets_processor.data_io.dataset_util import DatasetUtil
+from hypernets_processor.data_utils.average import Average
+from hypernets_processor.data_utils.propagate_uncertainties import PropagateUnc
+
 import punpy
 import numpy as np
 
@@ -19,91 +28,109 @@ __status__ = "Development"
 
 
 class SurfaceReflectance:
-    def __init__(self,context,MCsteps=1000,parallel_cores=1):
-        self._measurement_function_factory = ProtocolFactory()
-        self.prop= punpy.MCPropagation(MCsteps,parallel_cores=parallel_cores)
-        self.hdsb = HypernetsDSBuilder(context=context)
-        self.writer=HypernetsWriter(context)
+    def __init__(self, context, MCsteps=1000, parallel_cores=1):
+        self._measurement_function_factory = ProtocolFactory(context=context)
+        self.prop = PropagateUnc(context, MCsteps, parallel_cores=parallel_cores)
+        self.templ = DataTemplates(context=context)
+        self.writer = HypernetsWriter(context)
+        self.avg = Average(context)
+        self.calibrate = Calibrate(context)
+        self.plot = Plotting(context)
         self.context = context
+        self.rh = RhymerHypstar(context)
+        self.rhp = RhymerProcessing(context)
+        self.rhs = RhymerShared(context)
 
-    def process(self,dataset_l1c):
-        dataset_l1c = self.perform_checks(dataset_l1c)
-        l1tol2_function = self._measurement_function_factory.get_measurement_function(self.context.get_config_value("measurement_function_surface_reflectance"))
+    def process_l1c(self, dataset):
+        dataset_l1c = self.templ.l1c_from_l1b_dataset(dataset)
+        dataset_l1c = self.rh.get_wind(dataset_l1c)
+        dataset_l1c = self.rh.get_fresnelrefl(dataset_l1c)
+
+        l1ctol1b_function = self._measurement_function_factory.get_measurement_function(
+            self.context.get_config_value("measurement_function_surface_reflectance"))
+
+        input_vars = l1ctol1b_function.get_argument_names()
+        input_qty = self.prop.find_input(input_vars, dataset_l1c)
+        u_random_input_qty = self.prop.find_u_random_input(input_vars, dataset_l1c)
+        u_systematic_input_qty, corr_systematic_input_qty = \
+            self.prop.find_u_systematic_input(input_vars, dataset_l1c)
+
+        L1c = self.prop.process_measurement_function_l2(
+            ["water_leaving_radiance", "reflectance_nosc", "reflectance", "epsilon"],
+            dataset_l1c, l1ctol1b_function.function, input_qty,
+            u_random_input_qty, u_systematic_input_qty, corr_systematic_input_qty,param_fixed=[False,False,False,False,True])
+
+        failSimil=self.rh.qc_similarity(L1c)
+        L1c["quality_flag"][np.where(failSimil == 1)] = DatasetUtil.set_flag(
+            L1c["quality_flag"][np.where(failSimil == 1)], "simil_fail")  # for i in range(len(mask))]
+
+        if self.context.get_config_value("write_l1c"):
+            self.writer.write(L1c, overwrite=True)
+        for measurandstring in ["water_leaving_radiance","reflectance_nosc","reflectance","epsilon"]:
+            try:
+                if self.context.get_config_value("plot_l1c"):
+                    self.plot.plot_series_in_sequence(measurandstring, L1c)
+
+                if self.context.get_config_value("plot_uncertainty"):
+                    self.plot.plot_relative_uncertainty(measurandstring, L1c, L2=True)
+            except:
+                print("not plotting ",measurandstring)
+        return L1c
+
+
+    def process_l2(self, dataset):
+        dataset = self.perform_checks(dataset)
+        l1tol2_function = self._measurement_function_factory.get_measurement_function(
+            self.context.get_config_value("measurement_function_surface_reflectance"))
         input_vars = l1tol2_function.get_argument_names()
-        input_qty = self.find_input(input_vars,dataset_l1c)
-        u_random_input_qty = self.find_u_random_input(input_vars,dataset_l1c)
-        u_systematic_input_qty = self.find_u_systematic_input(input_vars,dataset_l1c)
-        dataset_l2 = self.l2_from_l1c_dataset(dataset_l1c)
+        input_qty = self.prop.find_input(input_vars, dataset)
+        u_random_input_qty = self.prop.find_u_random_input(input_vars, dataset)
+        u_systematic_input_qty, cov_systematic_input_qty = \
+            self.prop.find_u_systematic_input(input_vars, dataset)
 
-        if self.context.get_config_value("network")=="W":
-            dataset_l2 = self.process_measurement_function(["nlw","rhow_nosc","rhow"],
-                dataset_l2,l1tol2_function.function,input_qty,u_random_input_qty,
-                u_systematic_input_qty)
+        if self.context.get_config_value("network").lower() == "w":
 
-        elif self.context.get_config_value("network")=="L":
-            dataset_l2 = self.process_measurement_function("reflectance",dataset_l2,
-                                                           l1tol2_function.function,
-                                                           input_qty,u_random_input_qty,
-                                                           u_systematic_input_qty)
+            dataset_l2a = self.avg.average_L2(dataset)
 
-        self.writer.write(dataset_l2,overwrite=True)
-        return dataset_l2
+            for measurandstring in ["water_leaving_radiance", "reflectance_nosc",
+                                    "reflectance", "epsilon"]:
+                try:
+                    if self.context.get_config_value("plot_l2a"):
+                        self.plot.plot_series_in_sequence(measurandstring, dataset_l2a)
 
-    def find_input(self,variables,dataset):
-        """
-        returns a list of the data for a given list of input variables
+                    if self.context.get_config_value("plot_uncertainty"):
+                        self.plot.plot_relative_uncertainty(measurandstring, dataset_l2a, L2=True)
 
-        :param variables:
-        :type variables:
-        :param dataset:
-        :type dataset:
-        :return:
-        :rtype:
-        """
-        inputs = []
-        for var in variables:
-            inputs.append(dataset[var].values)
-        return inputs
+                    if self.context.get_config_value("plot_correlation"):
+                        self.plot.plot_correlation(measurandstring, dataset_l2a, L2=True)
+                except:
+                    print("not plotting ", measurandstring)
 
-    def find_u_random_input(self,variables,dataset):
-        """
-        returns a list of the random uncertainties on the data for a given list of input variables
+        elif self.context.get_config_value("network").lower() == "l":
+            dataset_l2a = self.templ.l2_from_l1c_dataset(dataset)
+            dataset_l2a = self.prop.process_measurement_function_l2(["reflectance"], dataset_l2a,
+                                                                    l1tol2_function.function,
+                                                                    input_qty, u_random_input_qty,
+                                                                    u_systematic_input_qty,
+                                                                    cov_systematic_input_qty)
+            if self.context.get_config_value("plot_l2a"):
+                self.plot.plot_series_in_sequence("reflectance", dataset_l2a)
 
-        :param variables:
-        :type variables:
-        :param dataset:
-        :type dataset:
-        :return:
-        :rtype:
-        """
-        inputs = []
-        for var in variables:
-            try:
-                inputs.append(dataset["u_random_"+var].values)
-            except:
-                inputs.append(None)
-        return inputs
+            if self.context.get_config_value("plot_uncertainty"):
+                self.plot.plot_relative_uncertainty("reflectance", dataset_l2a, L2=True)
 
-    def find_u_systematic_input(self,variables,dataset):
-        """
-        returns a list of the systematic uncertainties on the data for a given list of input variables
+            if self.context.get_config_value("plot_correlation"):
+                self.plot.plot_correlation("reflectance", dataset_l2a, L2=True)
+        else:
+            self.context.logger.error("network is not correctly defined")
 
-        :param variables:
-        :type variables:
-        :param dataset:
-        :type dataset:
-        :return:
-        :rtype:
-        """
-        inputs = []
-        for var in variables:
-            try:
-                inputs.append(dataset["u_systematic_"+var].values)
-            except:
-                inputs.append(None)
-        return inputs
+        if self.context.get_config_value("write_l2a"):
+            self.writer.write(dataset_l2a, overwrite=True)
 
-    def perform_checks(self,dataset_l1):
+        return dataset_l2a
+
+
+    def perform_checks(self, dataset_l1):
         """
         Identifies and removes faulty measurements (e.g. due to cloud cover).
 
@@ -114,48 +141,3 @@ class SurfaceReflectance:
         """
 
         return dataset_l1
-
-    def l2_from_l1c_dataset(self,datasetl1c):
-        """
-        Makes a L2 template of the data, and propagates the appropriate keywords from L1.
-
-        :param datasetl0:
-        :type datasetl0:
-        :return:
-        :rtype:
-        """
-        if self.context.get_config_value("network") == "L":
-            l2a_dim_sizes_dict = {"wavelength":len(datasetl1c["wavelength"]),
-                                  "series":len(datasetl1c['series'])}
-            l2a = self.hdsb.create_ds_template(l2a_dim_sizes_dict, "L_L2A")
-
-        elif self.context.get_config_value("network") == "W":
-            l2a_dim_sizes_dict = {"wavelength": len(datasetl1c["wavelength"]),
-                                  "scan": len(datasetl1c['scan'])}
-            l2a = self.hdsb.create_ds_template(l2a_dim_sizes_dict, "W_L2A")
-
-        return l2a
-
-    def process_measurement_function(self,measurandstrings,dataset,measurement_function,input_quantities,u_random_input_quantities,
-                                     u_systematic_input_quantities):
-        measurand = measurement_function(*input_quantities)
-        u_random_measurand = self.prop.propagate_random(measurement_function,input_quantities,u_random_input_quantities,output_vars=len(measurandstrings))
-        u_systematic_measurand,corr_systematic_measurand,corr_between = self.prop.propagate_systematic(measurement_function,
-                                                                                          input_quantities,
-                                                                                          u_systematic_input_quantities,
-                                                                                          return_corr=True,corr_axis=0,output_vars=len(measurandstrings))
-        for im, measurandstring in enumerate(measurandstrings):
-            dataset[measurandstring].values = measurand[im]
-            dataset["u_random_"+measurandstring].values = u_random_measurand[im]
-            dataset["u_systematic_"+measurandstring].values = u_systematic_measurand[im]
-            dataset["corr_random_"+measurandstring].values = np.eye(len(u_random_measurand[im]))
-            dataset["corr_systematic_"+measurandstring].values = corr_systematic_measurand[im]
-
-        return dataset
-
-
-
-
-
-
-

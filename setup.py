@@ -85,7 +85,7 @@ setup(
     name="hypernets_processor",
     version=__version__,
     description="Software for processing Hypernets field data",
-    authors=["Sam Hunt", "Clemence Goyens"],
+    authors=["Sam Hunt", "Pieter De Vis", "Clemence Goyens"],
     long_description=long_description,
     author_email="sam.hunt@npl.co.uk",
     url="http://hypernets.eu",
@@ -100,7 +100,10 @@ setup(
             os.path.join("etc", "processor.config"),
             os.path.join("etc", "scheduler.config"),
             os.path.join("etc", "jobs.txt"),
-        ],
+            os.path.join("etc", "job_template.config"),
+            os.path.join("etc", "processor_land_defaults.config"),
+            os.path.join("etc", "processor_water_defaults.config"),
+            "calibration/calibration_files/*/*/*/*"],
     },
     install_requires=[
         "numpy",
@@ -110,15 +113,18 @@ setup(
         "matplotlib",
         "pysolar",
         "dataset",
+        "sqlalchemy==1.3.20",
         "sqlalchemy-utils",
         "punpy",
-        "psycopg2",
+        "freezegun"
+        # "psycopg2",
     ],
     entry_points={
         "console_scripts": [
-            "hypernets_processor =  hypernets_processor.cli.hypernets_processor_cli:cli",
-            "hypernets_processor_setup =  hypernets_processor.cli.setup_processor_cli:cli",
-            "hypernets_processor_job_init =  hypernets_processor.cli.init_job_cli:cli"
+            "hypernets_sequence_processor = hypernets_processor.cli.sequence_processor_cli:cli",
+            "hypernets_scheduler = hypernets_processor.cli.scheduler_cli:cli",
+            "hypernets_processor_setup = hypernets_processor.cli.setup_processor_cli:cli",
+            "hypernets_processor_job_init = hypernets_processor.cli.init_job_cli:cli"
         ],
     },
 )

@@ -9,10 +9,10 @@ from hypernets_processor.utils.paths import parse_sequence_path
 from hypernets_processor.context import Context
 from hypernets_processor.sequence_processor import SequenceProcessor
 import os
-
+import traceback
 
 """___Authorship___"""
-__author__ = "Sam Hunr"
+__author__ = "Sam Hunt"
 __created__ = "21/10/2020"
 __version__ = __version__
 __maintainer__ = "Sam Hunt"
@@ -36,6 +36,7 @@ def get_target_sequences(context, to_archive):
     # raw_data_directory may either be a sequence path or directory of sequence paths
 
     raw_paths = []
+
     if parse_sequence_path(context.get_config_value("raw_data_directory")) is not None:
         raw_paths.append(context.get_config_value("raw_data_directory"))
     else:
@@ -48,18 +49,27 @@ def get_target_sequences(context, to_archive):
     # If adding to archive, remove previously processed paths from list by referencing
     # archive db
 
-    if to_archive:
+    if to_archive is True:
         processed_products = [
-            product["raw_product_name"]
+            product["sequence_name"]
             for product in context.archive_db["products"].find(
-                site=context.get_config_value("site")
+                site_id=context.get_config_value("site_id")
             )
         ]
+
+        failed_products = [
+            anomaly["sequence_name"]
+            for anomaly in context.anomaly_db["anomalies"].find(
+                site_id=context.get_config_value("site_id")
+            )
+        ]
+
+        complete_products = processed_products + failed_products
 
         directory = os.path.dirname(raw_paths[0])
 
         raw_products = [os.path.basename(raw_path) for raw_path in raw_paths]
-        raw_products = list(set(raw_products) - set(processed_products))
+        raw_products = list(set(raw_products) - set(complete_products))
         raw_paths = [
             os.path.join(directory, raw_product) for raw_product in raw_products
         ]
@@ -85,24 +95,46 @@ def main(processor_config_path, job_config_path, to_archive):
     job_config = read_config_file(job_config_path)
 
     # Configure logging
-    logger = configure_logging(config=job_config)
+    name = __name__
+    if "job_name" in job_config["Job"].keys():
+        name = job_config["Job"]["job_name"]
+
+    logger = configure_logging(config=job_config, name=name)
 
     # Define context
     context = Context(
         processor_config=processor_config, job_config=job_config, logger=logger
     )
     context.set_config_value("to_archive", to_archive)
-
     # Determine target sequences
     target_sequences = get_target_sequences(context, to_archive)
 
     # Run processor
     sp = SequenceProcessor(context=context)
+    target_sequences_passed = 0
+    target_sequences_total = len(target_sequences)
 
-    for target_sequence in target_sequences:
-        sp.process_sequence(target_sequence)
+    if target_sequences_total == 0:
+        msg = "No sequences to process"
 
-    return None
+    else:
+        for target_sequence in target_sequences:
+
+            context.logger.info("Processing sequence: " + target_sequence)
+
+            try:
+                sp.process_sequence(target_sequence)
+                target_sequences_passed += 1
+                context.logger.info("Complete")
+            except Exception as e:
+                logger.error("Failed: " + repr(e))
+                logger.debug(traceback.format_exc())
+                context.anomaly_db.add_x_anomaly()
+
+        msg = str(target_sequences_passed) + "/" + str(target_sequences_total) + \
+              " sequences successfully processed"
+
+    return msg
 
 
 if __name__ == "__main__":

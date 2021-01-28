@@ -35,7 +35,7 @@ class DatasetUtil:
 
         :type dtype: type
         :param dtype: numpy data type
-dekrie
+
         :type dim_names: list
         :param dim_names: (optional) dimension names as strings, i.e. ["dim1_name", "dim2_name", "dim3_size"]
 
@@ -53,6 +53,8 @@ dekrie
 
         if dim_names is not None:
             default_array = DataArray(empty_array, dims=dim_names)
+        elif (dim_names is None) and (dim_sizes == []):
+            default_array = DataArray(empty_array)
         else:
             default_array = DataArray(empty_array, dims=DEFAULT_DIM_NAMES[-len(dim_sizes):])
 
@@ -224,13 +226,10 @@ dekrie
     def _get_flag_encoding(da):
         """
         Returns flag encoding for flag type data array
-
         :type da: xarray.DataArray
         :param da: data array
-
         :return: flag meanings
         :rtype: list
-
         :return: flag masks
         :rtype: list
         """
@@ -247,10 +246,8 @@ dekrie
     def unpack_flags(da):
         """
         Breaks down flag data array into dataset of boolean masks for each flag
-
         :type da: xarray.DataArray
         :param da: dataset
-
         :return: flag masks
         :rtype: xarray.Dataset
         """
@@ -265,16 +262,57 @@ dekrie
         return ds
 
     @staticmethod
-    def set_flag(da, flag_name, error_if_set=False):
+    def get_flags_mask_or(da, flags=None):
         """
-        Sets named flag for elements in data array
+        Returns boolean mask for set of flags, defined as logical or of flags
 
         :type da: xarray.DataArray
         :param da: dataset
 
+        :type flags: list
+        :param flags: list of flags (if unset all data flags selected)
+
+        :return: flag masks
+        :rtype: numpy.ndarray
+        """
+
+        flags_ds = DatasetUtil.unpack_flags(da)
+
+        flags = flags if flags is not None else flags_ds.variables
+        mask_flags = [flags_ds[flag].values for flag in flags]
+
+        return np.logical_or.reduce(mask_flags)
+
+    @staticmethod
+    def get_flags_mask_and(da, flags=None):
+        """
+        Returns boolean mask for set of flags, defined as logical and of flags
+
+        :type da: xarray.DataArray
+        :param da: dataset
+
+        :type flags: list
+        :param flags: list of flags (if unset all data flags selected)
+
+        :return: flag masks
+        :rtype: numpy.ndarray
+        """
+
+        flags_ds = DatasetUtil.unpack_flags(da)
+
+        flags = flags if flags is not None else flags_ds.variables
+        mask_flags = [flags_ds[flag].values for flag in flags]
+
+        return np.logical_and.reduce(mask_flags)
+
+    @staticmethod
+    def set_flag(da, flag_name, error_if_set=False):
+        """
+        Sets named flag for elements in data array
+        :type da: xarray.DataArray
+        :param da: dataset
         :type flag_name: str
         :param flag_name: name of flag to set
-
         :type error_if_set: bool
         :param error_if_set: raises error if chosen flag is already set for any element
         """
@@ -289,19 +327,18 @@ dekrie
         flag_bit = flag_meanings.index(flag_name)
         flag_mask = flag_masks[flag_bit]
 
-        return da | flag_mask
+        da.values = da.values | flag_mask
+
+        return da
 
     @staticmethod
     def unset_flag(da, flag_name, error_if_unset=False):
         """
         Unsets named flag for specified index of dataset variable
-
         :type da: xarray.DataArray
         :param da: data array
-
         :type flag_name: str
         :param flag_name: name of flag to unset
-
         :type error_if_unset: bool
         :param error_if_unset: raises error if chosen flag is already set at specified index
         """
@@ -316,16 +353,16 @@ dekrie
         flag_bit = flag_meanings.index(flag_name)
         flag_mask = flag_masks[flag_bit]
 
-        return da & ~flag_mask
+        da.values = da.values & ~flag_mask
+
+        return da
 
     @staticmethod
     def get_set_flags(da):
         """
         Return list of set flags for single element data array
-
         :type da: xarray.DataArray
         :param da: single element data array
-
         :return: set flags
         :rtype: list
         """
@@ -346,13 +383,10 @@ dekrie
     def check_flag_set(da, flag_name):
         """
         Returns if flag for single element data array
-
         :type da: xarray.DataArray
         :param da: single element data array
-
         :type flag_name: str
         :param flag_name: name of flag to set
-
         :return: set flags
         :rtype: list
         """
@@ -365,6 +399,8 @@ dekrie
         if flag_name in set_flags:
             return True
         return False
+
+
 
 
 if __name__ == "__main__":

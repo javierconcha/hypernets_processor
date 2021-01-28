@@ -56,7 +56,7 @@ def cli():
     settings["network"] = determine_set_value(
         "network",
         context,
-        options=["land", "water"],
+        options=["l", "w"],
         return_existing=True
     )
     settings["network_defaults"] = cli_input_yn("set network default config values (overwrites existing)")
@@ -87,7 +87,7 @@ def cli():
             default="sqlite:///"+os.path.join(settings["working_directory"], db_fmt+".db"),
         )
 
-    settings["log_path"] = os.path.join(settings["working_directory"], "processor.log")
+    settings["log_path"] = os.path.join(settings["working_directory"], "scheduler.log")
 
     main(settings)
 

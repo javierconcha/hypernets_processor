@@ -21,6 +21,7 @@ TIME_FMT_L2B = "%Y%m%d"
 DS_FORMAT_FNAMES = {"L0_RAD": "L0_RAD",
                     "L0_BLA": "L0_BLA",
                     "L0_IRR": "L0_IRR",
+                    "CAL": "CAL",
                     "L_L1A_RAD": "L1A_RAD",
                     "W_L1A_RAD": "L1A_RAD",
                     "L_L1A_IRR": "L1A_IRR",
@@ -32,6 +33,7 @@ DS_FORMAT_FNAMES = {"L0_RAD": "L0_RAD",
                     "W_L1B": "L1B",
                     "L_L1C": "L1C",
                     "W_L1C": "L1C",
+                    "W_L1D": "L1D",
                     "L_L2A": "L2A_REF",
                     "W_L2A": "L2A_REF",
                     "L_L2B": "L2B_REF",
@@ -47,7 +49,7 @@ class ProductNameUtil:
         self.context = context
 
     def create_product_name(
-        self, ds_format, network=None, site=None, time=None, version=None):
+        self, ds_format, network=None, site_id=None, time=None, version=None, swir=None):
         """
         Return a valid product name for Hypernets file
 
@@ -60,14 +62,17 @@ class ProductNameUtil:
         :type network: str
         :param network: (optional, overrides value in context) abbreviated network name
 
-        :type site: str
-        :param site: (optional, overrides value in context) abbreviated site name
+        :type site_id: str
+        :param site_id: (optional, overrides value in context) abbreviated site name
 
         :type time: datetime.datetime
         :param time: (optional, overrides value in context) acquisition time
 
         :type version: str
         :param version: (optional, overrides value in context) processing version
+
+        :type swir: bool
+        :param swir: if swir file
 
         :return: product name
         :rtype: str
@@ -77,14 +82,17 @@ class ProductNameUtil:
         if (network is None) and (self.context is not None):
             network = self.context.get_config_value("network")
 
-        if (site is None) and (self.context is not None):
-            site = self.context.get_config_value("site")
+        if (site_id is None) and (self.context is not None):
+            site_id = self.context.get_config_value("site_id")
 
         if (time is None) and (self.context is not None):
             time = self.context.get_config_value("time")
 
         if (version is None) and (self.context is not None):
             version = str(self.context.get_config_value("version"))
+
+        if swir:
+            swir="SWIR"
 
         # Prepare product name parts
         ptype = DS_FORMAT_FNAMES[ds_format]
@@ -94,13 +102,14 @@ class ProductNameUtil:
 
         time_string = time.strftime(TIME_FMT_L12A) if time is not None else None
         network = network.upper() if network is not None else None
-        site = site.upper() if network is not None else None
+        site_id = site_id.upper() if site_id is not None else None
         version = "v" + version if version is not None else None
 
-        # Assemble parts
-        product_name_parts = ["HYPERNETS", network, site, ptype, time_string, version]
-        product_name_parts = filter(None, product_name_parts)
+        today_time_string = datetime.now().strftime(TIME_FMT_L12A)
 
+        # Assemble parts
+        product_name_parts = ["HYPERNETS", network, site_id, ptype, time_string, today_time_string, version, swir]
+        product_name_parts = filter(None, product_name_parts)
         return "_".join(product_name_parts)
 
 

@@ -3,18 +3,16 @@
 ## zenith angle is used to differentiate Lsky and Lu
 ## QV July 2018
 ## Last modifications: 2019-07-10 (QV) renamed from PANTR, added .lower() to sensor ID as it is in some cases uppercase in the current deployment (RBINS ROOF)
-from configparser import ConfigParser
 from datetime import datetime
 from hypernets_processor.rhymer.rhymer.shared.rhymer_shared import RhymerShared
 from hypernets_processor.rhymer.rhymer.ancillary.rhymer_ancillary import RhymerAncillary
 from hypernets_processor.rhymer.rhymer.processing.rhymer_processing import RhymerProcessing
-from hypernets_processor.version import __version__
-from hypernets_processor.data_io.hypernets_ds_builder import HypernetsDSBuilder
+from hypernets_processor.data_io.data_templates import DataTemplates
 from hypernets_processor.data_io.hypernets_writer import HypernetsWriter
-from hypernets_processor.calibration.calibrate import Calibrate
-from hypernets_processor.interpolation.interpolate import InterpolateL1c
-from hypernets_processor.data_io.format.metadata import METADATA_DEFS
-from hypernets_processor.data_io.format.variables import VARIABLES_DICT_DEFS
+from hypernets_processor.interpolation.interpolate import Interpolate
+from hypernets_processor.plotting.plotting import Plotting
+from hypernets_processor.data_utils.average import Average
+from hypernets_processor.data_io.dataset_util import DatasetUtil as du
 
 import numpy as np
 import math
@@ -24,15 +22,16 @@ class RhymerHypstar:
 
     def __init__(self, context):
         self.context = context
-        self.hdsb = HypernetsDSBuilder(context=context)
+        self.templ = DataTemplates(context=context)
         self.writer = HypernetsWriter(context)
-        self.cal = Calibrate(context, MCsteps=100)
-        self.intp = InterpolateL1c(context, MCsteps=1000)
+        self.avg = Average(context)
+        self.intp = Interpolate(context, MCsteps=1000)
+        self.plot = Plotting(context)
         self.rhymeranc = RhymerAncillary(context)
         self.rhymerproc = RhymerProcessing(context)
         self.rhymershared = RhymerShared(context)
 
-    def qc_scan(self, dataset, measurandstring):
+    def qc_scan(self, dataset, measurandstring, dataset_l1b):
         ## no inclination
         ## difference at 550 nm < 25% with neighbours
         ##
@@ -42,10 +41,11 @@ class RhymerHypstar:
         verbosity = self.context.get_config_value("verbosity")
         series_id = np.unique(dataset['series_id'])
         wave = dataset['wavelength'].values
+        flags = np.zeros(shape=len(dataset['scan']))
+        id = 0
+        for s in series_id:
 
-        for i in series_id:
-
-            scans = dataset['scan'][dataset['series_id'] == i]
+            scans = dataset['scan'][dataset['series_id'] == s]
 
             ##
             n = len(scans)
@@ -85,60 +85,46 @@ class RhymerHypstar:
 
                 ## continue if value exceeds the cv threshold
                 if v > self.context.get_config_value("diff_threshold"):
-                    # set quality flag to 10
-                    dataset['quality_flag'][scans[i]] = 10
+                    # get flag value for the temporal variability
+                    if measurandstring == 'irradiance':
+                        flags[id] = 1
+                        dataset_l1b['quality_flag'][range(len(dataset_l1b['scan']))] = du.set_flag(
+                            dataset_l1b["quality_flag"][range(len(dataset_l1b['scan']))],
+                            "temp_variability_ed")
+                    else:
+                        flags[id] = 1
+                        dataset_l1b['quality_flag'][range(len(dataset_l1b['scan']))] = du.set_flag(
+                            dataset_l1b["quality_flag"][range(len(dataset_l1b['scan']))],
+                            "temp_variability_lu")
+
                     seq = dataset.attrs["sequence_id"]
                     ts = datetime.utcfromtimestamp(dataset['acquisition_time'][i])
 
-                    if verbosity > 2: print('Temporal jump: in {}:  Aquisition time {}, {}'.format(seq, ts, ', '.join(
-                        ['{}:{}'.format(k, dataset[k][scans[i]].values) for k in ['scan', 'quality_flag']])))
+                    if verbosity > 2: self.context.logger.info(
+                        'Temporal jump: in {}:  Aquisition time {}, {}'.format(seq, ts, ', '.join(
+                            ['{}:{}'.format(k, dataset[k][scans[i]].values) for k in ['scan', 'quality_flag']])))
+                id += 1
 
-                ## check for complete spectra
-                ## assumed here they are masked by inf or nan by calibration step
-                if any([not np.isfinite(j) for j in data[i]]):
-                    # set quality flag to 10
-                    dataset['quality_flag'][scans[i]] = 10
-                    ts = datetime.utcfromtimestamp(dataset['acquisition_time'][i])
-                    if verbosity > 2: print('inf or Nan data in: Aquisition time {}, {}'.format(ts, ', '.join(
-                        ['{}:{}'.format(k, dataset[k][scans[i]].values) for k in ['scan', 'quality_flag']])))
+            return dataset_l1b, flags
 
-            return dataset
+    def cycleparse(self, rad, irr, dataset_l1b):
 
-    def cycleparse(self, rad, irr):
-
-        protocol = self.context.get_config_value("protocol")
-        print(protocol)
+        protocol = self.context.get_config_value("measurement_function_surface_reflectance")
+        self.context.logger.debug(protocol)
         nbrlu = self.context.get_config_value("n_upwelling_rad")
         nbred = self.context.get_config_value("n_upwelling_irr")
         nbrlsky = self.context.get_config_value("n_downwelling_rad")
 
-        if protocol != 'water_std':
+        if protocol != 'WaterNetworkProtocol':
             # here we should simply provide surface reflectance?
             # what about a non-standard protocol but that includes the required standard series?
-            print('Unknown measurement protocol: {}'.format(protocol))
+            self.context.logger.error('Unknown measurement protocol: {}'.format(protocol))
         else:
             uprad = []
             downrad = []
             for i in rad['scan']:
                 scani = rad.sel(scan=i)
-                sena = scani["viewing_azimuth_angle"].values
                 senz = scani["viewing_zenith_angle"].values
-                print(scani['acquisition_time'].values)
-                ts = datetime.utcfromtimestamp(int(scani['acquisition_time'].values))
-                # not fromtimestamp?
-
-                if (senz != 'NULL') & (sena != 'NULL'):
-                    senz = float(senz)
-                    sena = abs(float(sena))
-                else:
-                    if self.context.get_config_value("verbosity") > 2: print(
-                        'NULL angles: Aquisition time {}, {}'.format(ts, ', '.join(
-                            ['{}:{}'.format(k, scani[k].values) for k in ['scan', 'quality_flag']])))
-                    continue
-
-                # ## identify measurement
-                measurement = None
-                ## radiance
                 if senz < 90:
                     measurement = 'upwelling_radiance'
                     uprad.append(int(i))
@@ -150,48 +136,76 @@ class RhymerHypstar:
             lu = rad.sel(scan=uprad)
             lsky = rad.sel(scan=downrad)
 
+            for i in lu['scan']:
+                scani = lu.sel(scan=i)
+                sena = scani["viewing_azimuth_angle"].values
+                senz = scani["viewing_zenith_angle"].values
+                self.context.logger.debug(scani['acquisition_time'].values)
+                ts = datetime.utcfromtimestamp(int(scani['acquisition_time'].values))
+                # not fromtimestamp?
+
+                if (senz != 'NULL') & (sena != 'NULL'):
+                    senz = float(senz)
+                    sena = abs(float(sena))
+                else:
+                    dataset_l1b['quality_flag'] = du.set_flag(dataset_l1b.sel(scan=i)['quality_flag'], "angles_missing")
+                    self.context.logger.info('NULL angles: Aquisition time {}, {}'.format(ts, ', '.join(
+                        ['{}:{}'.format(k, scani[k].values) for k in ['scan', 'quality_flag']])))
+                    continue
+
             # check if we have the same azimuth for lu and lsky
             sena_lu = np.unique(lu["viewing_azimuth_angle"].values)
             sena_lsky = np.unique(lsky["viewing_azimuth_angle"].values)
             for i in sena_lu:
                 if i not in sena_lsky:
-                    lu["quality_flag"][lu["viewing_azimuth_angle"] == i] = 10
+                    dataset_l1b["quality_flag"][dataset_l1b["viewing_azimuth_angle"] == i] = du.set_flag(
+                        dataset_l1b["quality_flag"][dataset_l1b["viewing_azimuth_angle"] == i], "lu_eq_missing")
                     if self.context.get_config_value("verbosity") > 2:
                         ts = [datetime.utcfromtimestamp(x) for x in
                               lu['acquisition_time'][lu["viewing_azimuth_angle"] == i].values]
-                        print('No azimuthal equivalent downwelling radiance measurement: Aquisition time {}, {}'.format(
-                            ts, ', '.join(
-                                ['{}:{}'.format(k, lu[k][lu["viewing_azimuth_angle"] == i].values) for k in
-                                 ['scan', 'quality_flag']])))
+                        self.context.logger.info(
+                            'No azimuthal equivalent downwelling radiance measurement: Aquisition time {}, {}'.format(
+                                ts, ', '.join(
+                                    ['{}:{}'.format(k, lu[k][lu["viewing_azimuth_angle"] == i].values) for k in
+                                     ['scan', 'quality_flag']])))
 
             # check if we have the required fresnel angle for lsky
             senz_lu = np.unique(lu["viewing_zenith_angle"].values)
             senz_lsky = 180 - np.unique(lsky["viewing_zenith_angle"].values)
             for i in senz_lu:
                 if i not in senz_lsky:
-                    lu["quality_flag"][lu["viewing_zenith_angle"] == i] = 10
-                    if self.context.get_config_value("verbosity") > 2:
-                        ts = [datetime.utcfromtimestamp(x) for x in
-                              lu['acquisition_time'][lu["viewing_zenith_angle"] == i].values]
-                        print(
-                            'No downwelling radiance measurement at appropriate fresnel angle: Aquisition time {}, {}'.format(
-                                ts, ', '.join(
-                                    ['{}:{}'.format(k, lu[k][lu["viewing_azimuth_angle"] == i].values) for k
-                                     in ['scan', 'quality_flag']])))
+                    dataset_l1b["quality_flag"][dataset_l1b["viewing_azimuth_angle"] == i] = du.set_flag(
+                        dataset_l1b["quality_flag"][dataset_l1b["viewing_azimuth_angle"] == i], "fresnel_angle_missing")
+                    ts = [datetime.utcfromtimestamp(x) for x in
+                          lu['acquisition_time'][lu["viewing_zenith_angle"] == i].values]
+                    self.context.logger.info(
+                        'No downwelling radiance measurement at appropriate fresnel angle: Aquisition time {}, {}'.format(
+                            ts, ', '.join(
+                                ['{}:{}'.format(k, lu[k][lu["viewing_azimuth_angle"] == i].values) for k
+                                 in ['scan', 'quality_flag']])))
 
             # check if correct number of radiance and irradiance data
-            if lu.scan[lu['quality_flag'] <= 1].count() < nbrlu:
-                if self.context.get_config_value("verbosity") > 2:
-                    print("No enough upwelling radiance data for sequence {}".format(lu.attrs['sequence_id']))
+
+            if lu.scan[lu['quality_flag'] <= 0].count() < nbrlu:
+                for i in range(len(dataset_l1b["scan"])):
+                    dataset_l1b["quality_flag"][dataset_l1b["scan"] == i] = du.set_flag(
+                        dataset_l1b["quality_flag"][dataset_l1b["scan"] == i], "min_nbrlu")
+                self.context.logger.info(
+                    "No enough upwelling radiance data for sequence {}".format(lu.attrs['sequence_id']))
             if lsky.scan[lsky['quality_flag'] <= 1].count() < nbrlsky:
-                if self.context.get_config_value("verbosity") > 2:
-                    print("No enough downwelling radiance data for sequence {}".format(lsky.attrs['sequence_id']))
-
+                for i in range(len(dataset_l1b["scan"])):
+                    dataset_l1b["quality_flag"][dataset_l1b["scan"] == i] = du.set_flag(
+                        dataset_l1b["quality_flag"][dataset_l1b["scan"] == i], "min_nbrlsky")
+                self.context.logger.info(
+                    "No enough downwelling radiance data for sequence {}".format(lsky.attrs['sequence_id']))
             if irr.scan[irr['quality_flag'] <= 1].count() < nbred:
-                if self.context.get_config_value("verbosity") > 2:
-                    print("No enough irradiance data for sequence {}".format(irr.attrs['sequence_id']))
+                for i in range(len(dataset_l1b["scan"])):
+                    dataset_l1b["quality_flag"][dataset_l1b["scan"] == i] = du.set_flag(
+                        dataset_l1b["quality_flag"][dataset_l1b["scan"] == i], "min_nbred")
+                self.context.logger.info(
+                    "No enough downwelling irradiance data for sequence {}".format(irr.attrs['sequence_id']))
 
-        return lu, lsky, irr
+            return lu, lsky, irr, dataset_l1b
 
     def get_wind(self, l1b):
 
@@ -200,8 +214,10 @@ class RhymerHypstar:
         wind = []
         for i in range(len(l1b.scan)):
             wa = self.context.get_config_value("wind_ancillary")
-            if wa == False:
-                print("Default wind speed {}".format(self.context.get_config_value("wind_default")))
+            if not wa:
+                l1b["quality_flag"][l1b["scan"] == i] = du.set_flag(l1b["quality_flag"][l1b["scan"] == i],
+                                                                    "def_wind_flag")
+                self.context.logger.info("Default wind speed {}".format(self.context.get_config_value("wind_default")))
                 wind.append(self.context.get_config_value("wind_default"))
             else:
                 isodate = datetime.utcfromtimestamp(l1b['acquisition_time'].values[i]).strftime('%Y-%m-%d')
@@ -237,21 +253,19 @@ class RhymerHypstar:
 
             ## get fresnel reflectance
             if self.context.get_config_value("fresnel_option") == 'Mobley':
-                # check here if no inconsistency between LUT and fresnel option??
-                rholut = self.rhymerproc.mobley_lut_read()
                 if (fresnel_sza[i] is not None) & (fresnel_raa[i] is not None):
                     sza = min(fresnel_sza[i], 79.999)
                     rhof = self.rhymerproc.mobley_lut_interp(sza, fresnel_vza[i], fresnel_raa[i],
-                                                                wind=wind[i])
+                                                             wind=wind[i])
                 else:
-                    # add a quality flag!
-                    fresnel = 'fixed'
-
+                    l1b["quality_flag"][l1b["scan"] == i] = du.set_flag(l1b["quality_flag"][l1b["scan"] == i],
+                                                                        "fresnel_default")
+                    rhof = self.context.get_config_value("rhof_default")
             if self.context.get_config_value("fresnel_option") == 'Ruddick2006':
                 rhof = self.context.get_config_value("rhof_default")
-                print("Apply Ruddick et al., 2006")
+                self.context.logger.info("Apply Ruddick et al., 2006")
                 if wind[i] is not None:
-                    rhof = rhof + 0.00039 * wind[i]  + 0.000034 * wind[i]  ** 2
+                    rhof = rhof + 0.00039 * wind[i] + 0.000034 * wind[i] ** 2
 
             fresnel_coeff[i] = rhof
 
@@ -262,234 +276,46 @@ class RhymerHypstar:
 
         return l1b
 
-    def get_epsilon(self, rhow_nosc, wavelength):
 
-        # wavelength = l1b['wavelength'].values
-        epsilon = np.zeros(len(rhow_nosc))
+    def qc_similarity(self, L1c):
 
-        ## compute similarity epsilon
-        for i in range(len(rhow_nosc)):
-            fail_simil, eps = self.qc_similarity(wavelength, rhow_nosc[i],
-                                                 self.similarity_wr,
-                                                 self.similarity_wp,
-                                                 self.similarity_w1,
-                                                 self.similarity_w2,
-                                                 self.similarity_alpha)
+        wave=L1c["wavelength"]
+        wr=L1c.attrs["similarity_waveref"]
+        wp=L1c.attrs["similarity_wavethres"]
 
-            ## R2005 quality control
-            ## skip spectra not following similarity
-            if self.similarity_test:
-                if fail_simil:
-                    if verbosity > 2: print('Failed simil test.')
-                    continue
-                else:
-                    if verbosity > 2: print('Passed simil test.')
-            epsilon[i] = eps
-        # l1b["epsilon"].values=epsilon
-        return epsilon
-
-    def get_rhow_nosc(self, l1b):
-
-        ## read mobley rho lut
-
-        wavelength = l1b['wavelength'].values
-        fresnel_coeff = l1b['rhof'].values
-        rhow_nosc_all = np.zeros((len(l1b.scan), len(wavelength)))
-        lw_all = np.zeros((len(l1b.scan), len(wavelength)))
-        rhow_all = np.zeros((len(l1b.scan), len(wavelength)))
-        epsilon = np.zeros(len(l1b.scan))
-        simil_flag = np.zeros(len(l1b.scan))
-
-        for i in range(len(l1b.scan)):
-            ## compute rhow
-            lu = l1b['upwelling_radiance'][:, i].values
-            # should I average here or take the downwelling radiance per scan???
-            # mls stands for mean sky/downwelling radiance, so need to check if mean is better than interpolated?
-            mls = l1b['downwelling_radiance'][:, i].values
-            # same for ed? Better interpolated or mean Ed???
-            med = l1b['irradiance'][:, i].values
-
-            lw_all[i] = [(lu[w] - (fresnel_coeff[i] * mls[w])) for w in range(len(wavelength))]
-            rhow_nosc_all[i] = [np.pi * (lu[w] - (fresnel_coeff[i] * mls[w])) / med[w] for w in range(len(wavelength))]
-
-            ## compute similarity epsilon
-            fail_simil, eps = self.qc_similarity(wavelength, rhow_nosc_all[i],
-                                                 self.context.get_config_value("similarity_wr"),
-                                                 self.context.get_config_value("similarity_wp"),
-                                                 self.context.get_config_value("similarity_w1"),
-                                                 self.context.get_config_value("similarity_w2"),
-                                                 self.context.get_config_value("similarity_alpha"))
-
-            ## R2005 quality control
-            ## skip spectra not following similarity
-            if self.context.get_config_value("similarity_test")==True:
-                if fail_simil:
-                    if verbosity > 2: print('Failed simil test.')
-                    simil_flag[i] = 10
-                    continue
-                else:
-                    if verbosity > 2: print('Passed simil test.')
-                    simil_flag[i] = 0
-
-            ## R2005 correction
-            if self.context.get_config_value("similarity_correct")==True:
-                # print(epsilon)
-                rhow_all[i] = [r - eps for r in rhow_nosc_all[i]]
-            else:
-                rhow_all[i] = rhow_nosc_all[i]
-
-            epsilon[i] = eps
-
-        return rhow_nosc_all, rhow_all, epsilon, lw_all, simil_flag
-
-    def fresnelrefl_qc_simil(self, l1b, wind):
-
-        ## read mobley rho lut
-        rholut = self.rhymerproc.mobley_lut_read(self)
-
-        wavelength = l1b['wavelength'].values
-
-        fresnel_coeff = np.zeros(len(l1b.scan))
-        rhow_nosc_all = np.zeros((len(l1b.scan), len(wavelength)))
-        lw_all = np.zeros((len(l1b.scan), len(wavelength)))
-        rhow_all = np.zeros((len(l1b.scan), len(wavelength)))
-        epsilon = np.zeros(len(l1b.scan))
-        simil_flag = np.zeros(len(l1b.scan))
-
-        for i in range(len(l1b.scan)):
-            vza = l1b['viewing_zenith_angle'][i].values
-            sza = l1b['solar_zenith_angle'][i].values
-
-            diffa = l1b['viewing_azimuth_angle'][i].values - l1b['viewing_azimuth_angle'][i].values
-
-            if diffa >= 360:
-                diffa = diffa - 360
-            elif 0 <= diffa < 360:
-                diffa = diffa
-            else:
-                diffa = diffa + 360
-            raa = abs((diffa - 180))
-            sza = l1b['solar_zenith_angle'][i].values
-            ## get fresnel reflectance
-            if self.fresnel_option == 'Mobley':
-                if (sza is not None) & (raa is not None):
-                    sza_ = min(sza, 79.999)
-                    rhof = self.rhymerproc.mobley_lut_interp(sza, vza, raa,
-                                                                wind=wind[i],
-                                                                rholut=rholut)
-                else:
-                    # add a quality flag!
-                    fresnel = 'fixed'
-
-            if self.fresnel_option == 'Ruddick2006':
-                rhof = self.rhof_default
-                ## R2006
-                if wind is not None:
-                    rhof = rhof + 0.00039 * wind + 0.000034 * wind ** 2
-            ## compute rhow
-            lu = l1b['upwelling_radiance'][:, i].values
-            # should I average here or take the downwelling radiance per scan???
-            # mls stands for mean sky/downwelling radiance, so need to check if mean is better than interpolated?
-            mls = l1b['downwelling_radiance'][:, i].values
-            # same for ed? Better interpolated or mean Ed???
-            med = l1b['irradiance'][:, i].values
-
-            lw_all[i] = [(lu[w] - (rhof * mls[w])) for w in range(len(wavelength))]
-            rhow_nosc_all[i] = [np.pi * (lu[w] - (rhof * mls[w])) / med[w] for w in range(len(wavelength))]
-            fresnel_coeff[i] = rhof
-
-            ## compute similarity epsilon
-            print(self.similarity_alpha)
-            fail_simil, eps = self.qc_similarity(wavelength, rhow_nosc_all[i],
-                                                 self.similarity_wr,
-                                                 self.similarity_wp,
-                                                 self.similarity_w1,
-                                                 self.similarity_w2,
-                                                 self.similarity_alpha)
-
-            ## R2005 quality control
-            ## skip spectra not following similarity
-            if self.similarity_test:
-                if fail_simil:
-                    if verbosity > 2: print('Failed simil test.')
-                    simil_flag[i] = 10
-                    continue
-                else:
-                    if verbosity > 2: print('Passed simil test.')
-                    simil_flag[i] = 0
-
-            ## R2005 correction
-            if self.similarity_correct:
-                # print(epsilon)
-                rhow_all[i] = [r - eps for r in rhow_nosc_all[i]]
-            else:
-                rhow_all[i] = rhow_nosc_all[i]
-
-            epsilon[i] = eps
-
-        return lw_all, rhow_all, rhow_nosc_all, epsilon, simil_flag
-
-    ## QC a single rhow scan from PANTHYR
-    ## according to R2005
-    ##
-    ## QV July 2018
-    ## Last modifications: 2019-07-10 (QV) renamed from PANTR, integrated in rhymer
-
-    def qc_similarity(self, wave, data, wr=670, wp=0.05, w1=720, w2=780, alpha=2.35, ssd=None):
-
-        n = len(data)
-        data_retained = []
-
+        epsilon=L1c["epsilon"]
         ## get pixel index for wavelength
         irefr, wrefr = self.rhymershared.closest_idx(wave, wr)
-        iref1, wref1 = self.rhymershared.closest_idx(wave, w1)
-        iref2, wref2 = self.rhymershared.closest_idx(wave, w2)
 
-        ## get pixel index for similarity
-        if alpha is None:
-            if ssd is None: ssd = self.rhymerproc.similarity_read()
-            id1, w1 = self.rhymershared.closest_idx(ssd['wave'], w1 / 1000.)
-            id2, w2 = self.rhymershared.closest_idx(ssd['wave'], w2 / 1000.)
-            alpha = ssd['ave'][id1] / ssd['ave'][id2]
+        failSimil = []
+        scans = L1c['scan']
+        for i in range(len(scans)):
+            data=L1c['reflectance_nosc'].sel(scan=i).values
+            if abs(epsilon[i]) > wp * data[irefr]:
+                failSimil.append(1)
+            else:
+                failSimil.append(0)
+        return failSimil
 
-        ## compute epsilon
-        epsilon = (alpha * data[iref2] - data[iref1]) / (alpha - 1.0)
+    def process_l1c_int(self, l1a_rad, l1a_irr):
 
-        if abs(epsilon) > wp * data[irefr]:
-            return (True, epsilon)
-        else:
-            return (False, epsilon)
-
-    def process_l1b(self, L1a_rad, L1a_irr):
-
+        # because we average to Lu scan we propagate values from radiance!
+        dataset_l1b = self.templ.l1c_int_template_from_l1a_dataset_water(l1a_rad)
         # QUALITY CHECK: TEMPORAL VARIABILITY IN ED AND LSKY -> ASSIGN FLAG
-        L1a_rad = self.qc_scan(L1a_rad, measurandstring="radiance")
-        L1a_irr = self.qc_scan(L1a_irr, measurandstring="irradiance")
+        dataset_l1b, flags_rad = self.qc_scan(l1a_rad, "radiance", dataset_l1b)
+        dataset_l1b, flags_irr = self.qc_scan(l1a_irr, "irradiance", dataset_l1b)
         # QUALITY CHECK: MIN NBR OF SCANS -> ASSIGN FLAG
-        L1a_uprad, L1a_downrad, L1a_irr = self.cycleparse(L1a_rad, L1a_irr)
-        L1b_downrad = self.cal.average_l1b("radiance", L1a_downrad)
-        L1b_irr = self.cal.average_l1b("irradiance", L1a_irr)
+        # remove temporal variability scans before average
+        l1a_rad = l1a_rad.sel(scan=np.where(np.array(flags_rad) != 1)[0])
+        l1a_irr = l1a_irr.sel(scan=np.where(np.array(flags_irr) != 1)[0])
 
+        # check number of scans per cycle for up, down radiance and irradiance
+        L1a_uprad, L1a_downrad, L1a_irr, dataset_l1b = self.cycleparse(l1a_rad, l1a_irr, dataset_l1b)
+
+        L1b_downrad = self.avg.average_l1b("radiance", L1a_downrad)
+        L1b_irr = self.avg.average_l1b("irradiance", L1a_irr)
         # INTERPOLATE Lsky and Ed FOR EACH Lu SCAN! Threshold in time -> ASSIGN FLAG
-        L1b = self.intp.interpolate_l1b_w(L1a_uprad, L1b_downrad, L1b_irr)
-        L1b = self.get_wind(L1b)
-        L1b = self.get_fresnelrefl(L1b)
-        if self.context.get_config_value("write_l1b")==True:
-            self.writer.write(L1b, overwrite=True)
-        return L1b
-
-    def process_l1c(self, l1b):
-
-        rhow_nosc_all, rhow_all, epsilon, lw_all, simil_flag = self.get_rhow_nosc(l1b)
-        l1c_dim_sizes_dict = {"wavelength": len(l1b["wavelength"]),
-                              "scan": len(np.unique(l1b['scan']))}
-        dataset_l1c = self.hdsb.create_ds_template(l1c_dim_sizes_dict, "W_L1C", propagate_ds=l1b)
-        dataset_l1c['reflectance'].values = rhow_all.T
-
-        print(rhow_nosc_all.T)
-
-        dataset_l1c['reflectance_nosc'].values = rhow_nosc_all.T
-        dataset_l1c['epsilon'].values = epsilon
-        dataset_l1c['water_leaving_radiance'].values = lw_all.T
-
-        return dataset_l1c
+        # interpolate_l1b_w calls interpolate_irradiance which includes interpolation of the
+        # irradiance wavelength to the radiance wavelength
+        L1c_int = self.intp.interpolate_l1b_w(dataset_l1b,L1a_uprad, L1b_downrad, L1b_irr)
+        return L1c_int

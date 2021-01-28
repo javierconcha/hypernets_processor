@@ -20,8 +20,10 @@ __maintainer__ = "Sam Hunt"
 __email__ = "sam.hunt@npl.co.uk"
 __status__ = "Development"
 
+loggers = {}
 
-def configure_logging(fname=None, verbose=None, quiet=None, config=None):
+
+def configure_logging(fname=None, verbose=None, quiet=None, config=None, name=None):
     """
     Configure logger
 
@@ -38,9 +40,17 @@ def configure_logging(fname=None, verbose=None, quiet=None, config=None):
     :param config: Config file with logging configuration information. This finds fname, verbose and quiet if not
     specifed as arguments
 
+    :type name: str
+    :param name: (optional) set name of logger to get
+
     :return: logger
     :rtype: logging.logger
     """
+    global loggers
+
+    if name is not None:
+        if loggers.get(name):
+            return loggers.get(name)
 
     if config is not None:
         fname = get_config_value(config, "Log", "log_path", dtype=str)
@@ -48,7 +58,10 @@ def configure_logging(fname=None, verbose=None, quiet=None, config=None):
         quiet = get_config_value(config, "Log", "quiet", dtype=bool)
 
     # Configure logger
-    logger = logging.getLogger(__name__)
+    if name is None:
+        name = __name__
+
+    logger = logging.getLogger(name)
 
     # Define verboseness levels
     if verbose:
@@ -71,5 +84,7 @@ def configure_logging(fname=None, verbose=None, quiet=None, config=None):
         stream_handler = logging.StreamHandler(sys.stdout)
         stream_handler.setFormatter(stream_formatter)
         logger.addHandler(stream_handler)
+
+    loggers[name] = logger
 
     return logger

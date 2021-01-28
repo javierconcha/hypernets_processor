@@ -22,10 +22,8 @@ PROCESSOR_CONFIG_PROTECTED_VALUES = []
 class Context:
     """
     Class to determine and store processor state
-
     :type processor_config: configparser.RawConfigParser
     :param processor_config: processor config data object
-
     :type job_config: configparser.RawConfigParser
     :param job_config: job config data object
     """
@@ -36,8 +34,11 @@ class Context:
         self.config_values = {}
         self.logger = logger
         self.metadata_db = None
-        self.anomoly_db = None
+        self.anomaly_db = None
         self.archive_db = None
+
+        # Set defaults - to be overwritten
+        self.set_defaults()
 
         # Unpack processor_config to set relevant attributes
         if processor_config is not None:
@@ -49,20 +50,24 @@ class Context:
                 job_config, protected_values=PROCESSOR_CONFIG_PROTECTED_VALUES
             )
 
-        # Connect to anomoly databases
+        # Connect to databases
         db_fmts = DB_DICT_DEFS.keys()
         for db_fmt in db_fmts:
             if db_fmt + "_db_url" in self.get_config_names():
-                setattr(
-                    self,
-                    db_fmt+"_db",
-                    open_database(self.get_config_value(db_fmt + "_db_url"), create_format=db_fmt)
-                )
+                if self.get_config_value(db_fmt + "_db_url") is not None:
+                    setattr(
+                        self,
+                        db_fmt+"_db",
+                        open_database(
+                            self.get_config_value(db_fmt + "_db_url"),
+                            db_format=db_fmt,
+                            context=self
+                        )
+                    )
 
     def unpack_config(self, config, protected_values=None):
         """
         Unpacks config data, sets relevant entries to values instance attribute
-
         :type config: configparser.RawConfigParser
         :param config: config data
         """
@@ -78,10 +83,8 @@ class Context:
     def set_config_value(self, name, value):
         """
         Sets config data to values instance attribute
-
         :type name: str
         :param name: config data name
-
         :param value: config data value
         """
 
@@ -90,10 +93,8 @@ class Context:
     def get_config_value(self, name):
         """
         Get config value
-
         :type name: str
         :param name: config data name
-
         :return: config value
         """
 
@@ -102,12 +103,19 @@ class Context:
     def get_config_names(self):
         """
         Get available config value names
-
         :return: config value names
         :rtype: list
         """
 
         return list(self.config_values.keys())
+
+    def set_defaults(self):
+        """
+        Set defaults config values (to be overwritten by values in configuration files)
+        """
+
+        self.set_config_value("site_id", "TEST")
+        self.set_config_value("system_id", "220241")
 
 
 if __name__ == "__main__":

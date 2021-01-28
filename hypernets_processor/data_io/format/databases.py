@@ -40,13 +40,32 @@ Database schema specification for Hypernets land and water network
 # Metadata Database
 METADATA_DB = {}
 
-# Anolomy Database
-ANOMOLY_DB = {}
+# Anomaly Database
+ANOMALY_DB = {"anomalies": {"columns": {"anomaly_id": {"type": str},
+                                        "sequence_name": {"type": str},
+                                        "sequence_path": {"type": str},
+                                        "site_id": {"type": str},
+                                        "datetime": {"type": str},
+                                        }
+                            }
+              }
 
 # Archive Database
 ARCHIVE_DB = {"products": {"columns": {"product_name": {"type": str},
-                                       "raw_product_name": {"type": str},
-                                       "site": {"type": str}
+                                       "datetime": {"type": str},
+                                       "sequence_name": {"type": str},
+                                       "site_id": {"type": str},
+                                       "product_path": {"type": str},
+                                       "plot_path": {"type": str},
+                                       "image_path": {"type": str},
+                                       "solar_zenith_angle_min": {"type": str},
+                                       "solar_zenith_angle_max": {"type": str},
+                                       "solar_azimuth_angle_min": {"type": str},
+                                       "solar_azimuth_angle_max": {"type": str},
+                                       "viewing_zenith_angle_min": {"type": str},
+                                       "viewing_zenith_angle_max": {"type": str},
+                                       "viewing_azimuth_angle_min": {"type": str},
+                                       "viewing_azimuth_angle_max": {"type": str}
                                        }
                            }
               }
@@ -56,5 +75,5 @@ ARCHIVE_DB = {"products": {"columns": {"product_name": {"type": str},
 # --------------------
 
 DB_DICT_DEFS = {"metadata": METADATA_DB,
-                "anomoly": ANOMOLY_DB,
+                "anomaly": ANOMALY_DB,
                 "archive": ARCHIVE_DB}
